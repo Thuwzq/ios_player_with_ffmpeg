@@ -1,0 +1,14 @@
+prefix=/Users/liebentwei/Code/FFmpeg_with_tquic/build/ios/thin/arm64
+exec_prefix=${prefix}
+libdir=/Users/liebentwei/Code/FFmpeg_with_tquic/build/ios/thin/arm64/lib
+includedir=/Users/liebentwei/Code/FFmpeg_with_tquic/build/ios/thin/arm64/include
+
+Name: libavcodec
+Description: FFmpeg codec library
+Version: 61.19.101
+Requires: libavutil >= 59.39.100
+Requires.private: 
+Conflicts:
+Libs: -L${libdir}  -lavcodec -liconv -lm -framework AudioToolbox -pthread -framework VideoToolbox -framework CoreFoundation -framework CoreMedia -framework CoreVideo
+Libs.private: 
+Cflags: -I${includedir}
