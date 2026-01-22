@@ -12,6 +12,6 @@ An iOS player that uses FFmpeg to play video. (Can not play audio now)
 2. Run
 
 ## Test figure
-![./test.ipg]
+![./test.jpg]
 
 
