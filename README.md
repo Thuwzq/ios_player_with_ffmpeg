@@ -1,10 +1,3 @@
-//
-//  README.md
-//  ios_player_with_ffmpeg
-//
-//  Created by liebentwei on 2026/1/22.
-//
-
 # iOS Player with FFmpeg
 
 ## Introduction
