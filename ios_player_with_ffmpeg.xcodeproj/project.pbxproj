@@ -11,7 +11,6 @@
 		B171DCAC2F220FCE00B32984 /* VideoToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B171DCAB2F220FCE00B32984 /* VideoToolbox.framework */; };
 		B171DCAE2F220FD700B32984 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B171DCAD2F220FD700B32984 /* AudioToolbox.framework */; };
 		B171DD422F2218C600B32984 /* libiconv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = B171DD412F2218C600B32984 /* libiconv.tbd */; };
-		B171DDFA2F2226B900B32984 /* README.md in Sources */ = {isa = PBXBuildFile; fileRef = B171DDF92F2226A700B32984 /* README.md */; };
 		B171DDFC2F222A2800B32984 /* test.jpg in Resources */ = {isa = PBXBuildFile; fileRef = B171DDFB2F222A2800B32984 /* test.jpg */; };
 /* End PBXBuildFile section */
 
@@ -284,7 +283,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B171DDFA2F2226B900B32984 /* README.md in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

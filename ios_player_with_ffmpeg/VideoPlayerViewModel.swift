@@ -51,6 +51,7 @@ class VideoPlayerViewModel: ObservableObject {
                 }
                 
                 self.isLoading = false
+                self.play()
             } else {
                 self.errorMessage = "Failed to open video"
                 self.isLoading = false

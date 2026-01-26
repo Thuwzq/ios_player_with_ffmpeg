@@ -14,4 +14,3 @@ An iOS player that uses FFmpeg to play video. (Can not play audio now)
 ## Test figure
 ![test figure](./test.jpg)
 
-

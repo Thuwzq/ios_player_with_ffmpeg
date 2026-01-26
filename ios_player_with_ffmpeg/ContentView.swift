@@ -15,6 +15,9 @@ struct ContentView: View {
     // Some example video URLs for testing
     private let exampleURLs = [
         "killer.mp4",
+        "pilot.flv",
+        "tquic://106.52.100.46:8443/pilot.flv?use_wifi=1",
+        "tquic://106.52.100.46:8443/pilot.flv?use_wifi=0",
     ]
     
     var body: some View {
@@ -132,7 +135,7 @@ struct ContentView: View {
     /// 加载本地或网络视频
     private func loadVideo(filename: String) {
         // 如果是网络 URL，直接使用
-        if filename.hasPrefix("http://") || filename.hasPrefix("https://") {
+        if filename.hasPrefix("http://") || filename.hasPrefix("https://") || filename.hasPrefix("tquic://") {
             viewModel.openVideo(url: filename)
             return
         }
