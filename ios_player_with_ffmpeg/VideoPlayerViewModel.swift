@@ -18,16 +18,25 @@ class VideoPlayerViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     
+    // First frame load time(ms)
+    @Published var firstFrameLoadTime: Double?
+    
     private var decoder: FFmpegDecoder?
     private var playbackTask: Task<Void, Never>?
     private var playbackStartTime: CFAbsoluteTime = 0
     private var playbackStartPts: Double = 0
     
+    // Record loading start time
+    private var loadStartTime: CFAbsoluteTime = 0
+    
     func openVideo(url: String) {
         isLoading = true
         errorMessage = nil
+        firstFrameLoadTime = nil
         
         pause()
+
+        loadStartTime = CFAbsoluteTimeGetCurrent()
         
         let decoder = FFmpegDecoder()
         
@@ -47,6 +56,11 @@ class VideoPlayerViewModel: ObservableObject {
                 }).value {
                     self.currentFrame = firstFrame.image
                     self.currentTime = firstFrame.pts
+                    
+                    // Calculate and get first frame load time
+                    let firstFrameTime = (CFAbsoluteTimeGetCurrent() - self.loadStartTime) * 1000
+                    self.firstFrameLoadTime = firstFrameTime
+                    print("First frame load time: \(String(format: "%.2f", firstFrameTime)) ms")
                 }
                 
                 self.isLoading = false
