@@ -9,6 +9,12 @@ import Foundation
 import SwiftUI
 import Combine
 
+/// 单次卡顿记录
+struct StutterEvent {
+    let startTime: Double      // Stuttering start time
+    let duration: Double       // Stuttering duration(ms)
+}
+
 @MainActor
 class VideoPlayerViewModel: ObservableObject {
     @Published var currentFrame: UIImage?
@@ -20,6 +26,11 @@ class VideoPlayerViewModel: ObservableObject {
     
     // First frame load time(ms)
     @Published var firstFrameLoadTime: Double?
+    
+    // Stutter statistics
+    @Published var totalStutterTime: Double = 0      // Summary stuttering duration
+    @Published var stutterCount: Int = 0             // Summary stuttering count
+    @Published var stutterEvents: [StutterEvent] = [] // All stuttering events
     
     private var decoder: FFmpegDecoder?
     private var playbackTask: Task<Void, Never>?
@@ -33,10 +44,13 @@ class VideoPlayerViewModel: ObservableObject {
         isLoading = true
         errorMessage = nil
         firstFrameLoadTime = nil
-        
+
         pause()
 
         loadStartTime = CFAbsoluteTimeGetCurrent()
+        totalStutterTime = 0
+        stutterCount = 0
+        stutterEvents.removeAll()
         
         let decoder = FFmpegDecoder()
         
@@ -60,7 +74,7 @@ class VideoPlayerViewModel: ObservableObject {
                     // Calculate and get first frame load time
                     let firstFrameTime = (CFAbsoluteTimeGetCurrent() - self.loadStartTime) * 1000
                     self.firstFrameLoadTime = firstFrameTime
-                    print("First frame load time: \(String(format: "%.2f", firstFrameTime)) ms")
+                    print("📊 First frame load time: \(String(format: "%.2f", firstFrameTime)) ms")
                 }
                 
                 self.isLoading = false
@@ -117,11 +131,41 @@ class VideoPlayerViewModel: ObservableObject {
             guard let decoder = decoder else { return }
             
             while !Task.isCancelled && isPlaying {
-
-                guard let videoFrame = await Task.detached(operation: {
-                    decoder.readVideoFrame(blocking: true)
-                }).value else {
-                    // End of video
+                
+                // 先尝试非阻塞获取
+                var videoFrame = await Task.detached(operation: {
+                    decoder.readVideoFrame(blocking: false)
+                }).value
+                
+                // 如果没有获取到帧，开始记录卡顿
+                if videoFrame == nil {
+                    let stutterStartTime = CFAbsoluteTimeGetCurrent()
+                    let videoTimeAtStutter = currentTime
+                    
+                    // 阻塞等待帧
+                    videoFrame = await Task.detached(operation: {
+                        decoder.readVideoFrame(blocking: true)
+                    }).value
+                    
+                    // 计算卡顿时长
+                    if videoFrame != nil {
+                        let stutterDuration = (CFAbsoluteTimeGetCurrent() - stutterStartTime) * 1000
+                        
+                        // 只有卡顿超过一定阈值才记录（避免记录正常的帧间隔）
+                        if stutterDuration > 16.7 {
+                            let event = StutterEvent(startTime: videoTimeAtStutter, duration: stutterDuration)
+                            stutterEvents.append(event)
+                            stutterCount += 1
+                            totalStutterTime += stutterDuration
+                            
+                            print("🔴 Stutter #\(stutterCount): duration = \(String(format: "%.2f", stutterDuration)) ms, at video time = \(String(format: "%.2f", videoTimeAtStutter)) s")
+                        }
+                    }
+                }
+                
+                // 如果还是没有帧，说明视频结束
+                guard let frame = videoFrame else {
+                    printPlaybackSummary()
                     await MainActor.run {
                         self.isPlaying = false
                         self.currentTime = 0
@@ -135,7 +179,7 @@ class VideoPlayerViewModel: ObservableObject {
                 let targetTime = playbackStartPts + elapsedTime
                 
                 // If pts is greater than target time, wait
-                let framePts = videoFrame.pts
+                let framePts = frame.pts
                 if framePts > targetTime {
                     let waitTime = framePts - targetTime
                     if waitTime > 0 && waitTime < 1.0 {
@@ -151,10 +195,11 @@ class VideoPlayerViewModel: ObservableObject {
                     break
                 }
                 
-                currentFrame = videoFrame.image
+                currentFrame = frame.image
                 currentTime = framePts
                 
                 if currentTime >= duration - 0.1 {
+                    printPlaybackSummary()
                     isPlaying = false
                     currentTime = 0
                     seek(to: 0)
@@ -164,7 +209,28 @@ class VideoPlayerViewModel: ObservableObject {
         }
     }
     
+    /// 打印播放统计摘要
+    private func printPlaybackSummary() {
+        print("═══════════════════════════════════════════")
+        print("📊 Playback Summary")
+        print("───────────────────────────────────────────")
+        if let firstFrameTime = firstFrameLoadTime {
+            print("   First frame load time: \(String(format: "%.2f", firstFrameTime)) ms")
+        }
+        print("   Video duration: \(String(format: "%.2f", duration)) s")
+        print("   Total stutter count: \(stutterCount)")
+        print("   Total stutter time: \(String(format: "%.2f", totalStutterTime)) ms")
+        if stutterCount > 0 {
+            let avgStutter = totalStutterTime / Double(stutterCount)
+            print("   Average stutter duration: \(String(format: "%.2f", avgStutter)) ms")
+            let stutterRatio = totalStutterTime / (duration * 1000) * 100
+            print("   Stutter ratio: \(String(format: "%.2f", stutterRatio))%")
+        }
+        print("═══════════════════════════════════════════")
+    }
+    
     deinit {
         playbackTask?.cancel()
     }
 }
+
