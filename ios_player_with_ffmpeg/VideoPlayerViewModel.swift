@@ -19,15 +19,15 @@ class VideoPlayerViewModel: ObservableObject {
     @Published var errorMessage: String?
     
     private var decoder: FFmpegDecoder?
-    private var displayLink: CADisplayLink?
-    private var lastFrameTime: CFTimeInterval = 0
-    private var frameInterval: CFTimeInterval = 0
-    
     private var playbackTask: Task<Void, Never>?
+    private var playbackStartTime: CFAbsoluteTime = 0
+    private var playbackStartPts: Double = 0
     
     func openVideo(url: String) {
         isLoading = true
         errorMessage = nil
+        
+        pause()
         
         let decoder = FFmpegDecoder()
         
@@ -39,15 +39,14 @@ class VideoPlayerViewModel: ObservableObject {
             if success {
                 self.decoder = decoder
                 self.duration = decoder.duration
-                self.frameInterval = decoder.fps > 0 ? 1.0 / decoder.fps : 1.0 / 30.0
+                self.currentTime = 0
                 
                 // Read first frame
-                let firstFrame: UIImage? = await Task.detached {
-                    return decoder.readFrame()
-                }.value
-                
-                if let firstFrame = firstFrame {
-                    self.currentFrame = firstFrame
+                if let firstFrame = await Task.detached(operation: {
+                    decoder.readVideoFrame()
+                }).value {
+                    self.currentFrame = firstFrame.image
+                    self.currentTime = firstFrame.pts
                 }
                 
                 self.isLoading = false
@@ -63,6 +62,9 @@ class VideoPlayerViewModel: ObservableObject {
         guard !isPlaying, decoder != nil else { return }
         
         isPlaying = true
+        playbackStartTime = CFAbsoluteTimeGetCurrent()
+        playbackStartPts = currentTime
+        
         startPlayback()
     }
     
@@ -83,15 +85,14 @@ class VideoPlayerViewModel: ObservableObject {
             }.value
             
             if success {
-                self.currentTime = time
-                
                 // Read frame at new position
-                let frame: UIImage? = await Task.detached {
-                    return decoder.readFrame()
-                }.value
-                
-                if let frame = frame {
-                    self.currentFrame = frame
+                if let videoFrame = await Task.detached(operation: {
+                    decoder.readVideoFrame()
+                }).value {
+                    self.currentFrame = videoFrame.image
+                    self.currentTime = videoFrame.pts
+                } else {
+                    self.currentTime = time
                 }
             }
         }
@@ -99,37 +100,54 @@ class VideoPlayerViewModel: ObservableObject {
     
     private func startPlayback() {
         playbackTask = Task {
+            guard let decoder = decoder else { return }
+            
             while !Task.isCancelled && isPlaying {
-                if let frame = await readNextFrame() {
-                    currentFrame = frame
-                    currentTime += frameInterval
-                    
-                    if currentTime >= duration {
-                        isPlaying = false
-                        currentTime = 0
-                        seek(to: 0)
-                        break
-                    }
-                } else {
+
+                guard let videoFrame = await Task.detached(operation: {
+                    decoder.readVideoFrame(blocking: true)
+                }).value else {
                     // End of video
+                    await MainActor.run {
+                        self.isPlaying = false
+                        self.currentTime = 0
+                    }
+                    self.seek(to: 0)
+                    break
+                }
+                
+                // 计算当前应该显示的时间点
+                let elapsedTime = CFAbsoluteTimeGetCurrent() - playbackStartTime
+                let targetTime = playbackStartPts + elapsedTime
+                
+                // If pts is greater than target time, wait
+                let framePts = videoFrame.pts
+                if framePts > targetTime {
+                    let waitTime = framePts - targetTime
+                    if waitTime > 0 && waitTime < 1.0 {
+                        try? await Task.sleep(nanoseconds: UInt64(waitTime * 1_000_000_000))
+                    }
+                }
+                // If pts is less than target time too much(100ms), skip the frame
+                else if targetTime - framePts > 0.1 {
+                    continue
+                }
+                
+                if Task.isCancelled || !isPlaying {
+                    break
+                }
+                
+                currentFrame = videoFrame.image
+                currentTime = framePts
+                
+                if currentTime >= duration - 0.1 {
                     isPlaying = false
                     currentTime = 0
                     seek(to: 0)
                     break
                 }
-                
-                // Sleep for frame interval
-                try? await Task.sleep(nanoseconds: UInt64(frameInterval * 1_000_000_000))
             }
         }
-    }
-    
-    private func readNextFrame() async -> UIImage? {
-        guard let decoder = decoder else { return nil }
-        
-        return await Task.detached {
-            return decoder.readFrame()
-        }.value
     }
     
     deinit {

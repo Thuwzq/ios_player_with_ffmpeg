@@ -9,6 +9,12 @@ import Foundation
 import UIKit
 import Accelerate
 
+/// 带有时间戳的视频帧
+struct VideoFrame {
+    let image: UIImage
+    let pts: Double  // PTS(seconds)
+}
+
 class FFmpegDecoder {
     
     private var formatContext: UnsafeMutablePointer<AVFormatContext>?
@@ -19,6 +25,7 @@ class FFmpegDecoder {
     private var frame: UnsafeMutablePointer<AVFrame>?
     private var rgbFrame: UnsafeMutablePointer<AVFrame>?
     private var rgbBuffer: UnsafeMutablePointer<UInt8>?
+    private var timeBase: Double = 0
     
     var width: Int32 = 0
     var height: Int32 = 0
@@ -27,7 +34,7 @@ class FFmpegDecoder {
     
     private var isInitialized = false
     
-    private var frameQueue: [UIImage] = []
+    private var frameQueue: [VideoFrame] = []
     private let maxQueueSize: Int
     private var decodeThread: Thread?
     private var isDecoding = false
@@ -106,6 +113,9 @@ class FFmpegDecoder {
             return false
         }
         
+        let tb = stream.pointee.time_base
+        timeBase = Double(tb.num) / Double(tb.den)
+        
         // Find decoder
         guard let codec = avcodec_find_decoder(codecParameters.pointee.codec_id) else {
             print("Failed to find codec")
@@ -139,8 +149,7 @@ class FFmpegDecoder {
         // Calculate duration
         let noPtsValue = Int64.min
         if stream.pointee.duration != noPtsValue {
-            let timeBase = stream.pointee.time_base
-            duration = Double(stream.pointee.duration) * Double(timeBase.num) / Double(timeBase.den)
+            duration = Double(stream.pointee.duration) * timeBase
         } else if formatContext.pointee.duration != noPtsValue {
             duration = Double(formatContext.pointee.duration) / Double(AV_TIME_BASE)
         }
@@ -151,7 +160,6 @@ class FFmpegDecoder {
             fps = Double(frameRate.num) / Double(frameRate.den)
         }
         
-        // Initialize sws context for color conversion - use BGRA format，iOS support
         swsContext = sws_getContext(
             width, height, codecCtx.pointee.pix_fmt,
             width, height, AV_PIX_FMT_BGRA,
@@ -163,7 +171,7 @@ class FFmpegDecoder {
             return false
         }
         
-        // Allocate RGB frame buffer - use BGRA
+        // Allocate RGB frame buffer
         guard let rgbFrame = rgbFrame else {
             print("Failed to allocate RGB frame")
             return false
@@ -198,7 +206,7 @@ class FFmpegDecoder {
         }
         
         isInitialized = true
-        print("Video opened successfully: \(width)x\(height), duration: \(duration)s, fps: \(fps)")
+        print("Video opened successfully: \(width)x\(height), duration: \(duration)s, fps: \(fps), timeBase: \(timeBase)")
         
         startDecoding()
         
@@ -247,9 +255,9 @@ class FFmpegDecoder {
             
             queueCondition.unlock()
             
-            if let image = decodeNextFrame() {
+            if let videoFrame = decodeNextFrame() {
                 queueCondition.lock()
-                frameQueue.append(image)
+                frameQueue.append(videoFrame)
                 queueCondition.signal()
                 queueCondition.unlock()
             } else {
@@ -262,7 +270,7 @@ class FFmpegDecoder {
         }
     }
     
-    private func decodeNextFrame() -> UIImage? {
+    private func decodeNextFrame() -> VideoFrame? {
         guard isInitialized,
               let formatContext = formatContext,
               let codecContext = codecContext,
@@ -284,6 +292,13 @@ class FFmpegDecoder {
                 
                 let receiveResult = avcodec_receive_frame(codecContext, frame)
                 if receiveResult == 0 {
+                    var pts: Double = 0
+                    if frame.pointee.pts != Int64.min {
+                        pts = Double(frame.pointee.pts) * timeBase
+                    } else if frame.pointee.best_effort_timestamp != Int64.min {
+                        pts = Double(frame.pointee.best_effort_timestamp) * timeBase
+                    }
+                    
                     // Convert to BGRA
                     withUnsafePointer(to: &frame.pointee.data) { srcData in
                         withUnsafePointer(to: &frame.pointee.linesize) { srcLinesize in
@@ -307,7 +322,9 @@ class FFmpegDecoder {
                         }
                     }
                     
-                    return convertFrameToUIImage(rgbFrame: rgbFrame)
+                    if let image = convertFrameToUIImage(rgbFrame: rgbFrame) {
+                        return VideoFrame(image: image, pts: pts)
+                    }
                 }
             }
         }
@@ -315,7 +332,7 @@ class FFmpegDecoder {
         return nil
     }
     
-    func readFrame(blocking: Bool = true) -> UIImage? {
+    func readVideoFrame(blocking: Bool = true) -> VideoFrame? {
         queueCondition.lock()
         defer { queueCondition.unlock() }
         
@@ -326,12 +343,16 @@ class FFmpegDecoder {
         }
         
         if !frameQueue.isEmpty {
-            let image = frameQueue.removeFirst()
+            let videoFrame = frameQueue.removeFirst()
             queueCondition.signal()
-            return image
+            return videoFrame
         }
         
         return nil
+    }
+    
+    func readFrame(blocking: Bool = true) -> UIImage? {
+        return readVideoFrame(blocking: blocking)?.image
     }
     
     var cachedFrameCount: Int {
@@ -362,8 +383,8 @@ class FFmpegDecoder {
         queueCondition.unlock()
         
         let stream = formatContext.pointee.streams[Int(videoStreamIndex)]!
-        let timeBase = stream.pointee.time_base
-        let timestamp = Int64(time * Double(timeBase.den) / Double(timeBase.num))
+        let tb = stream.pointee.time_base
+        let timestamp = Int64(time * Double(tb.den) / Double(tb.num))
         
         let seekResult = av_seek_frame(formatContext, videoStreamIndex, timestamp, AVSEEK_FLAG_BACKWARD)
         
@@ -388,16 +409,14 @@ class FFmpegDecoder {
             return nil
         }
         
-        // 使用 CGContext 直接绘制，这是最可靠的方式
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         
-        // 创建位图上下文
         guard let context = CGContext(
-            data: nil,  // 让系统分配内存
+            data: nil,
             width: width,
             height: height,
             bitsPerComponent: 8,
-            bytesPerRow: 0,  // 让系统计算
+            bytesPerRow: 0,
             space: colorSpace,
             bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
         ) else {
@@ -405,7 +424,6 @@ class FFmpegDecoder {
             return nil
         }
         
-        // 获取 context 的数据指针并复制数据
         guard let contextData = context.data else {
             print("Failed to get context data")
             return nil
@@ -415,14 +433,12 @@ class FFmpegDecoder {
         let srcPtr = data
         let dstPtr = contextData.assumingMemoryBound(to: UInt8.self)
         
-        // 逐行复制，处理可能的行对齐差异
         for row in 0..<height {
             let srcRow = srcPtr + row * bytesPerRow
             let dstRow = dstPtr + row * contextBytesPerRow
             memcpy(dstRow, srcRow, min(bytesPerRow, contextBytesPerRow))
         }
         
-        // 从 context 创建 CGImage
         guard let cgImage = context.makeImage() else {
             print("Failed to make CGImage")
             return nil
