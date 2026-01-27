@@ -9,7 +9,6 @@ import Foundation
 import SwiftUI
 import Combine
 
-/// 单次卡顿记录
 struct StutterEvent {
     let startTime: Double      // Stuttering start time
     let duration: Double       // Stuttering duration(ms)
@@ -40,10 +39,14 @@ class VideoPlayerViewModel: ObservableObject {
     // Record loading start time
     private var loadStartTime: CFAbsoluteTime = 0
     
+    // Flag to prevent printing summary multiple times
+    private var hasPrintedSummary = false
+    
     func openVideo(url: String) {
         isLoading = true
         errorMessage = nil
         firstFrameLoadTime = nil
+        hasPrintedSummary = false
 
         pause()
 
@@ -63,6 +66,8 @@ class VideoPlayerViewModel: ObservableObject {
                 self.decoder = decoder
                 self.duration = decoder.duration
                 self.currentTime = 0
+                
+                print("📹 Video opened: duration = \(String(format: "%.2f", decoder.duration)) s, fps = \(String(format: "%.2f", decoder.fps))")
                 
                 // Read first frame
                 if let firstFrame = await Task.detached(operation: {
@@ -165,12 +170,8 @@ class VideoPlayerViewModel: ObservableObject {
                 
                 // 如果还是没有帧，说明视频结束
                 guard let frame = videoFrame else {
-                    printPlaybackSummary()
-                    await MainActor.run {
-                        self.isPlaying = false
-                        self.currentTime = 0
-                    }
-                    self.seek(to: 0)
+                    print("📍 End of video: no more frames available")
+                    onPlaybackFinished()
                     break
                 }
                 
@@ -198,15 +199,27 @@ class VideoPlayerViewModel: ObservableObject {
                 currentFrame = frame.image
                 currentTime = framePts
                 
-                if currentTime >= duration - 0.1 {
-                    printPlaybackSummary()
-                    isPlaying = false
-                    currentTime = 0
-                    seek(to: 0)
+                let isNearEnd = duration > 0 && currentTime >= duration - 0.5
+                let hasReachedEnd = decoder.hasReachedEnd
+                
+                if isNearEnd || hasReachedEnd {
+                    print("📍 End of video: currentTime = \(String(format: "%.2f", currentTime)) s, duration = \(String(format: "%.2f", duration)) s, hasReachedEnd = \(hasReachedEnd)")
+                    onPlaybackFinished()
                     break
                 }
             }
         }
+    }
+    
+    /// 播放结束时的处理
+    private func onPlaybackFinished() {
+        if !hasPrintedSummary {
+            hasPrintedSummary = true
+            printPlaybackSummary()
+        }
+        isPlaying = false
+        currentTime = 0
+        seek(to: 0)
     }
     
     /// 打印播放统计摘要
